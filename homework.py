@@ -3,68 +3,64 @@ import logging
 import os
 import sys
 import time
-
 from datetime import datetime
-from dotenv import load_dotenv
+
 import requests
 import vk_api
+from dotenv import load_dotenv
 from vk_api.utils import get_random_id
 
 from constants import ENDPOINT, HEADERS, HOMEWORK_VERDICTS, RETRY_PERIOD
 from exceptions import APIResponseError
 
-
 load_dotenv()
-
 
 VK_TOKEN = os.environ.get('VK_TOKEN')
 VK_USER_ID = os.environ.get('VK_USER_ID')
 PRACTICUM_TOKEN = os.environ.get('PRACTICUM_TOKEN')
 
+logger = logging.getLogger(__name__)
+
 
 def check_tokens():
     """Проверяет доступность переменных окружения.
 
-    В случае отсутствия токенов логирует ошибку и принудительно
-    завершает работу программы.
+    В случае отсутствия токенов вызывает исключение APIResponseError.
     """
     tokens = (
         ('VK_TOKEN', VK_TOKEN),
         ('VK_USER_ID', VK_USER_ID),
         ('PRACTICUM_TOKEN', PRACTICUM_TOKEN),
     )
-    missing_tokens = []
-
-    for name, value in tokens:
-        if not value:
-            missing_tokens.append(name)
-
+    missing_tokens = [name for name, value in tokens if not value]
     if missing_tokens:
-        logging.critical(
-            'Отсутствуют обязательные переменные окружения: %s',
-            ', '.join(missing_tokens)
+        error_msg = (
+            f'Отсутствуют обязательные переменные окружения: '
+            f"{', '.join(missing_tokens)}"
         )
-        sys.exit('Критическая ошибка: проверьте переменные окружения.')
+        logger.critical(error_msg)
+        raise APIResponseError(error_msg)
 
 
-def send_message(vk, message: str):
+def send_message(vk, message: str) -> bool:
     """Отправляет подготовленное сообщение в VK.
+
     Возвращает True в случае успешной отправки, иначе False.
     """
-    logging.info('Начало отправки сообщения в VK для ID %s', VK_USER_ID)
+    logger.info('Начало отправки сообщения в VK для ID %s', VK_USER_ID)
     try:
         vk.messages.send(
             user_id=VK_USER_ID,
             message=message,
             random_id=get_random_id()
         )
-        logging.debug(
+        logger.debug(
             'Сообщение успешно отправлено в VK для ID %s.',
             VK_USER_ID
         )
         return True
     except (vk_api.exceptions.ApiError, requests.RequestException) as error:
-        logging.error('Сбой при отправке сообщения в VK: %s.', error)
+        logger.error('Сбой при отправке сообщения в VK: %s.', error)
         return False
 
 
@@ -80,7 +76,7 @@ def get_api_answer(current_timestamp: int):
         datetime.fromtimestamp(unix_time)
         .strftime('%Y-%m-%d %H:%M:%S')
     )
-    logging.info(
+    logger.info(
         f'Начало запроса к API. Время: {readable_date}'
     )
     try:
@@ -151,26 +147,18 @@ def main():
                 if send_message(vk, message):
                     timestamp = response.get('current_date', timestamp)
             else:
-                logging.debug('Новых домашних работ в ответе нет.')
+                logger.debug('Новых домашних работ в ответе нет.')
                 timestamp = response.get('current_date', timestamp)
             last_error = None
         except Exception as error:
             error_msg = f'Сбой в работе программы: {error}'
-            logging.error(error_msg)
+            logger.error(error_msg)
             current_error_str = str(error)
             if current_error_str != last_error:
-                try:
-                    send_message(vk, error_msg)
-                    last_error = current_error_str
-                except Exception as send_error:
-                    logging.critical(
-                        'Не удалось отправить сообщение об ошибке в VK: '
-                        f'{send_error}'
-                    )
+                send_message(vk, error_msg)
+                last_error = current_error_str
         finally:
-            logging.info(
-                f'Ожидание следующей проверки {RETRY_PERIOD} секунд...'
-            )
+            logger.info('Ожидание следующей проверки: %s сек.', RETRY_PERIOD)
             time.sleep(RETRY_PERIOD)
 
 
@@ -184,6 +172,5 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        logging.critical(f'Бот упал из-за непредвиденной ошибки: {error}')
+        logger.critical(f'Бот упал из-за непредвиденной ошибки: {error}')
         sys.exit(1)
-    main()
